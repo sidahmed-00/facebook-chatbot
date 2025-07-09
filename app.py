@@ -96,9 +96,22 @@ def get_ai_response(user_message):
         
         if response.status_code == 200:
             result = response.json()
-            ai_message = result['choices'][0]['message']['content'].strip()
-            print(f"🤖 AI response: {ai_message}")
-            return ai_message
+            print(f"🔍 Full API response: {result}")
+            
+            # Check if response has the expected structure
+            if 'choices' in result and len(result['choices']) > 0:
+                ai_message = result['choices'][0]['message']['content'].strip()
+                print(f"🤖 AI response: '{ai_message}'")
+                
+                # Check if AI response is empty
+                if not ai_message or ai_message.strip() == "":
+                    print("⚠️ Empty AI response, using fallback")
+                    return "I'm here to help! Could you please rephrase your question?"
+                
+                return ai_message
+            else:
+                print("❌ Invalid API response structure")
+                return "Sorry, I received an invalid response. Please try again."
         else:
             print(f"❌ OpenRouter API Error: {response.status_code}")
             print(f"❌ Error response: {response.text}")
@@ -117,6 +130,18 @@ def get_ai_response(user_message):
 def send_message(recipient_id, message_text):
     """Send message to Facebook user"""
     try:
+        # Validate message text
+        if not message_text or message_text.strip() == "":
+            message_text = "Sorry, I couldn't generate a response. Please try again."
+            print("⚠️ Empty message detected, using fallback response")
+        
+        # Ensure message is not too long (Facebook limit is 2000 characters)
+        if len(message_text) > 2000:
+            message_text = message_text[:1997] + "..."
+            print("⚠️ Message truncated due to length limit")
+        
+        print(f"📤 Sending message: {message_text}")
+        
         url = f"https://graph.facebook.com/v18.0/me/messages?access_token={PAGE_ACCESS_TOKEN}"
         
         headers = {
