@@ -3,6 +3,7 @@ import requests
 import json
 import os
 from dotenv import load_dotenv
+import time
 
 load_dotenv()
 
@@ -16,6 +17,12 @@ OPENROUTER_API_KEY = os.getenv('OPENROUTER_API_KEY')
 # OpenRouter configuration
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 MODEL_NAME = "deepseek/deepseek-r1-0528:free"
+
+# Store processed message IDs to prevent duplicates
+processed_messages = set()
+
+# Clean up old processed messages every hour
+last_cleanup = time.time()
 
 @app.route('/', methods=['GET'])
 def verify():
@@ -35,6 +42,17 @@ def verify_webhook():
         print("❌ Webhook verification failed!")
         return "Verification failed", 403
 
+def cleanup_processed_messages():
+    """Clean up old processed messages to prevent memory issues"""
+    global last_cleanup, processed_messages
+    current_time = time.time()
+    
+    # Clean up every hour
+    if current_time - last_cleanup > 3600:
+        processed_messages.clear()
+        last_cleanup = current_time
+        print("🧹 Cleaned up processed messages cache")
+
 @app.route('/webhook', methods=['POST'])
 def webhook():
     """Handle incoming messages from Facebook"""
@@ -42,14 +60,28 @@ def webhook():
         data = request.get_json()
         print(f"🔔 Received webhook data: {data}")
         
-        if data['object'] == 'page':
-            for entry in data['entry']:
+        # Clean up old processed messages periodically
+        cleanup_processed_messages()
+        
+        if data and data.get('object') == 'page':
+            for entry in data.get('entry', []):
                 for messaging_event in entry.get('messaging', []):
-                    if 'message' in messaging_event:
+                    if 'message' in messaging_event and 'text' in messaging_event['message']:
+                        # Get message details
                         sender_id = messaging_event['sender']['id']
-                        message_text = messaging_event['message'].get('text', '')
+                        message_text = messaging_event['message']['text']
+                        message_id = messaging_event['message']['mid']
                         
                         print(f"👤 User message: {message_text}")
+                        print(f"🆔 Message ID: {message_id}")
+                        
+                        # Check if we've already processed this message
+                        if message_id in processed_messages:
+                            print("⚠️ Duplicate message detected, skipping")
+                            continue
+                        
+                        # Add to processed messages
+                        processed_messages.add(message_id)
                         
                         # Generate AI response
                         ai_response = get_ai_response(message_text)
@@ -80,7 +112,7 @@ def get_ai_response(user_message):
             "messages": [
                 {
                     "role": "system",
-                    "content": "You are a helpful and friendly AI assistant. Keep your responses concise and conversational, suitable for a Facebook Messenger chat."
+                    "content": "You are a helpful and friendly AI assistant. Keep your responses concise and conversational, suitable for a Facebook Messenger chat. Respond with only ONE message, not multiple messages."
                 },
                 {
                     "role": "user",
@@ -88,7 +120,8 @@ def get_ai_response(user_message):
                 }
             ],
             "max_tokens": 150,
-            "temperature": 0.7
+            "temperature": 0.7,
+            "stream": False
         }
         
         response = requests.post(OPENROUTER_URL, headers=headers, json=payload, timeout=30)
@@ -150,10 +183,11 @@ def send_message(recipient_id, message_text):
         
         payload = {
             "recipient": {"id": recipient_id},
-            "message": {"text": message_text}
+            "message": {"text": message_text},
+            "messaging_type": "RESPONSE"
         }
         
-        response = requests.post(url, headers=headers, json=payload)
+        response = requests.post(url, headers=headers, json=payload, timeout=10)
         
         if response.status_code == 200:
             print("📨 Message sent successfully!")
